@@ -1,1 +1,11 @@
+venv/
+venv311/
 
+__pycache__/
+*.pyc
+.DS_Store
+
+data/synthetic/
+data/processed/
+
+models/
