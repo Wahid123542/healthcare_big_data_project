@@ -12,15 +12,82 @@ from sklearn.metrics import roc_auc_score
 
 st.set_page_config(page_title="Healthcare Risk Dashboard", layout="wide")
 
-DATA_PATH = Path("data/synthetic/insurance_large.csv")
+RAW_DATA_PATH = Path("data/raw/insurance.csv")
+SYNTHETIC_DATA_PATH = Path("data/synthetic/insurance_large.csv")
+
 
 @st.cache_data
 def load_data() -> pd.DataFrame:
-    if not DATA_PATH.exists():
+    """
+    Load synthetic data if present locally.
+    Otherwise, load raw insurance data and create the extra columns
+    needed by the dashboard.
+    """
+    if SYNTHETIC_DATA_PATH.exists():
+        return pd.read_csv(SYNTHETIC_DATA_PATH)
+
+    if not RAW_DATA_PATH.exists():
         raise FileNotFoundError(
-            "Dataset not found. Run src/generate_data.py first so data/synthetic/insurance_large.csv exists."
+            "Base dataset not found. Expected data/raw/insurance.csv in the repository."
         )
-    return pd.read_csv(DATA_PATH)
+
+    df = pd.read_csv(RAW_DATA_PATH).copy()
+
+    np.random.seed(42)
+
+    df["patient_id"] = np.arange(1, len(df) + 1)
+
+    df["primary_care_visits"] = np.clip(
+        (df["age"] / 20 + df["children"] + np.random.poisson(1, len(df))).astype(int),
+        0,
+        12,
+    )
+
+    df["emergency_visits"] = np.clip(
+        (df["smoker"].map({"yes": 2, "no": 0}) + np.random.poisson(0.5, len(df))).astype(int),
+        0,
+        8,
+    )
+
+    df["hospital_visits"] = np.clip(
+        (
+            df["primary_care_visits"] * 0.3
+            + df["emergency_visits"]
+            + np.random.poisson(1, len(df))
+        ).astype(int),
+        0,
+        15,
+    )
+
+    df["preventive_visit_flag"] = (df["primary_care_visits"] >= 2).astype(int)
+
+    df["chronic_condition_score"] = np.clip(
+        (
+            (df["bmi"] / 10)
+            + (df["age"] / 20)
+            + df["smoker"].map({"yes": 2, "no": 0})
+        ).astype(int),
+        0,
+        10,
+    )
+
+    df["medication_count"] = np.clip(
+        (df["chronic_condition_score"] + np.random.poisson(1, len(df))).astype(int),
+        0,
+        15,
+    )
+
+    threshold = df["charges"].quantile(0.80)
+    df["high_cost"] = (df["charges"] > threshold).astype(int)
+
+    df["preventable_case"] = (
+        (df["high_cost"] == 1)
+        & (df["primary_care_visits"] <= 1)
+        & (df["preventive_visit_flag"] == 0)
+    ).astype(int)
+
+    return df
+
 
 @st.cache_resource
 def train_model(df: pd.DataFrame):
@@ -109,6 +176,7 @@ def estimate_risk_band(probability: float) -> str:
 
 def estimate_cost_band(smoker: str, bmi: float, age: int, chronic_condition_score: int) -> str:
     score = 0
+
     if smoker == "yes":
         score += 3
     if bmi >= 30:
@@ -152,7 +220,9 @@ def generate_recommendations(input_row: pd.DataFrame, risk_probability: float) -
 
 def main():
     st.title("Healthcare Risk & Preventable Cost Dashboard")
-    st.caption("Interactive UI for predicting high-cost patient risk and suggesting preventive interventions.")
+    st.caption(
+        "Interactive UI for predicting high-cost patient risk and suggesting preventive interventions."
+    )
 
     df = load_data()
     model, auc, features = train_model(df)
@@ -162,7 +232,9 @@ def main():
     col2.metric("High-Cost Rate", f"{df['high_cost'].mean() * 100:.1f}%")
     col3.metric("Model AUC", f"{auc:.3f}")
 
-    tab1, tab2, tab3 = st.tabs(["Patient Predictor", "Population Insights", "Project Notes"])
+    tab1, tab2, tab3 = st.tabs(
+        ["Patient Predictor", "Population Insights", "Project Notes"]
+    )
 
     with tab1:
         st.subheader("Patient Risk Predictor")
@@ -174,41 +246,53 @@ def main():
             bmi = st.slider("BMI", 15.0, 55.0, 29.0, 0.1)
             children = st.slider("Children", 0, 5, 1)
             smoker = st.selectbox("Smoker", ["no", "yes"])
-            region = st.selectbox("Region", ["northeast", "northwest", "southeast", "southwest"])
+            region = st.selectbox(
+                "Region", ["northeast", "northwest", "southeast", "southwest"]
+            )
 
         with right:
             primary_care_visits = st.slider("Primary Care Visits", 0, 12, 2)
             emergency_visits = st.slider("Emergency Visits", 0, 8, 0)
             hospital_visits = st.slider("Hospital Visits", 0, 15, 1)
-            preventive_visit_flag = st.selectbox("Preventive Visit Flag", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
+            preventive_visit_flag = st.selectbox(
+                "Preventive Visit Completed",
+                [0, 1],
+                format_func=lambda x: "Yes" if x == 1 else "No",
+            )
             chronic_condition_score = st.slider("Chronic Condition Score", 0, 10, 4)
             medication_count = st.slider("Medication Count", 0, 15, 2)
 
-        input_df = pd.DataFrame([
-            {
-                "age": age,
-                "sex": sex,
-                "bmi": bmi,
-                "children": children,
-                "smoker": smoker,
-                "region": region,
-                "primary_care_visits": primary_care_visits,
-                "emergency_visits": emergency_visits,
-                "hospital_visits": hospital_visits,
-                "preventive_visit_flag": preventive_visit_flag,
-                "chronic_condition_score": chronic_condition_score,
-                "medication_count": medication_count,
-            }
-        ])
+        input_df = pd.DataFrame(
+            [
+                {
+                    "age": age,
+                    "sex": sex,
+                    "bmi": bmi,
+                    "children": children,
+                    "smoker": smoker,
+                    "region": region,
+                    "primary_care_visits": primary_care_visits,
+                    "emergency_visits": emergency_visits,
+                    "hospital_visits": hospital_visits,
+                    "preventive_visit_flag": preventive_visit_flag,
+                    "chronic_condition_score": chronic_condition_score,
+                    "medication_count": medication_count,
+                }
+            ]
+        )
 
         if st.button("Predict Patient Risk", type="primary"):
             probability = model.predict_proba(input_df[features])[:, 1][0]
             prediction = model.predict(input_df[features])[0]
             risk_band = estimate_risk_band(probability)
             cost_band = estimate_cost_band(smoker, bmi, age, chronic_condition_score)
+
             likely_preventable = (
-                prediction == 1 and primary_care_visits <= 1 and preventive_visit_flag == 0
+                prediction == 1
+                and primary_care_visits <= 1
+                and preventive_visit_flag == 0
             )
+
             recommendations = generate_recommendations(input_df, probability)
 
             a, b, c = st.columns(3)
@@ -217,7 +301,10 @@ def main():
             c.metric("Estimated Cost Band", cost_band)
 
             st.write("### Care Recommendation Summary")
-            st.write(f"**Likely Preventable Case:** {'Yes' if likely_preventable else 'No'}")
+            st.write(
+                f"**Likely Preventable Case:** {'Yes' if likely_preventable else 'No'}"
+            )
+
             for rec in recommendations:
                 st.write(f"- {rec}")
 
@@ -233,19 +320,26 @@ def main():
             .round(2)
             .reset_index()
         )
-        risk_counts = df["high_cost"].value_counts().rename(index={0: "Not High Cost", 1: "High Cost"})
-        preventable_counts = df["preventable_case"].value_counts().rename(index={0: "No", 1: "Yes"})
+
+        risk_counts = df["high_cost"].value_counts().rename(
+            index={0: "Not High Cost", 1: "High Cost"}
+        )
+
+        preventable_counts = df["preventable_case"].value_counts().rename(
+            index={0: "No", 1: "Yes"}
+        )
 
         c1, c2 = st.columns(2)
 
         with c1:
             st.write("#### Average Charges and Visits by Smoking Status")
             st.dataframe(smoker_summary, use_container_width=True)
-            st.bar_chart(smoker_summary.set_index("smoker")["charges"])
+            st.bar_chart(smoker_summary.set_index("smoker")[["charges", "hospital_visits"]])
 
         with c2:
             st.write("#### High-Cost Patient Counts")
             st.bar_chart(risk_counts)
+
             st.write("#### Preventable Case Counts")
             st.bar_chart(preventable_counts)
 
@@ -259,16 +353,16 @@ def main():
             """
             This application demonstrates an end-to-end healthcare data science workflow:
 
-            - synthetic big-data style patient dataset generation
-            - PySpark processing for scalable analytics
+            - synthetic healthcare feature generation
+            - scalable project design based on PySpark processing
             - machine learning to predict high-cost patients
             - business-facing UI for risk review and preventive action
 
             Recommended next improvements:
-            - save the trained model to disk
+            - save and load a trained model
             - add SHAP or coefficient explanations
             - connect to a real database or claims source
-            - deploy with Streamlit Community Cloud
+            - deploy with enhanced monitoring
             """
         )
 
