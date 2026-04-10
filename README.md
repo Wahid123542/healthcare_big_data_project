@@ -2,7 +2,7 @@
 
 ## 🌍 Live Demo
 
-Coming soon (deploying on Streamlit Cloud)
+https://healthcarebigdataproject-nkhrbnewnjessyhzhebzkv.streamlit.app/
 
 ---
 
